@@ -25,6 +25,8 @@ class AdafruitIO_Feed : public AdafruitIO_MQTT {
 
   public:
     AdafruitIO_Feed(AdafruitIO *io, const char *name);
+    AdafruitIO_Feed(AdafruitIO *io, const char *name, const char *owner);
+
     ~AdafruitIO_Feed();
 
     bool save(char *value, double lat=0, double lon=0, double ele=0);
@@ -37,6 +39,8 @@ class AdafruitIO_Feed : public AdafruitIO_MQTT {
     bool save(float value, double lat=0, double lon=0, double ele=0, int precision=6);
     bool save(double value, double lat=0, double lon=0, double ele=0, int precision=6);
 
+    bool get();
+
     bool exists();
     bool create();
 
@@ -46,6 +50,7 @@ class AdafruitIO_Feed : public AdafruitIO_MQTT {
     void subCallback(char *val, uint16_t len);
 
     const char *name;
+    const char *owner;
 
     AdafruitIO_Data *lastValue();
     AdafruitIO_Data *data;
@@ -56,11 +61,13 @@ class AdafruitIO_Feed : public AdafruitIO_MQTT {
     void _init();
 
     char *_topic;
+    char *_get_topic;
     char *_create_url;
     char *_feed_url;
 
     Adafruit_MQTT_Subscribe *_sub;
     Adafruit_MQTT_Publish *_pub;
+    Adafruit_MQTT_Publish *_get_pub;
 
     AdafruitIO *_io;
     AdafruitIO_Data *_data;

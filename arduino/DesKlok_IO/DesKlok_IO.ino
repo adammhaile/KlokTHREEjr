@@ -1,18 +1,18 @@
-#include <AdafruitIO_WiFi.h>
 #include <EEPROM.h>
+#include <ESP8266WiFi.h>
+#include <ESPSerialWiFiManager.h>
+#include <Timezone.h>    // https://github.com/JChristensen/Timezone
 #include <EEPROMAnything.h>
 #include "config.h"
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include <FastLED.h>
-#include <WiFiClientSecure.h>
+// #include <WiFiClientSecure.h>
 #include <credentials.h> //see arduino/libraries/credentials/README for a credentials.h template
 #define ULTIM8x16
 #include <MatrixMaps.h>
 
-#define WIFI_MANAGER
-
-WiFiClientSecure *client_p;
+#define RUN_MGR_ON_REBOOT 0 //If set to 1, the manager prompt appears every power cycle
 
 //#include "dutch_v1.h"
 // #include "english_v0.h"
@@ -30,6 +30,16 @@ WiFiClientSecure *client_p;
 // #include "hungarian_v2.h"
 // #include "irish_v1.h"
 // #include "spanish_v1.h"
+
+// US Eastern Time Zone (New York, Detroit)
+TimeChangeRule myDST = {"EDT", Second, Sun, Mar, 2, -240};    //Daylight time = UTC - 4 hours
+TimeChangeRule mySTD = {"EST", First, Sun, Nov, 2, -300};     //Standard time = UTC - 5 hours
+Timezone myTZ(myDST, mySTD);
+
+TimeChangeRule *tcr;        //pointer to the time change rule, use to get TZ abbrev
+
+
+ESPSerialWiFiManager esp = ESPSerialWiFiManager();
 
 // You can specify the time server pool and the offset (in seconds, can be
 // changed later with setTimeOffset() ). Additionaly you can specify the
@@ -95,7 +105,7 @@ uint8_t display_idx;
 uint8_t last_min_hack_inc = 0;
 uint16_t last_time_inc = 0;
 
-/* The display memory buffer is larger than physical display for screen 
+/* The display memory buffer is larger than physical display for screen
  * staging and fast display.
  */
 const uint8_t MAX_BRIGHTNESS = 50;
@@ -128,7 +138,7 @@ void blend_to_rainbow(){
   int i;
   CHSV newcolor;
   int count = ((current_time % 300) * 255) / 300;
-  
+
   newcolor.val = 255;
   newcolor.sat = 255;
   for(int ii=0; ii<NUM_LEDS; ii++){
@@ -183,23 +193,35 @@ void fill_blue(){
 void printTime(uint32_t tm){
   uint8_t hh, mm, ss;
   char s[8];
-  
+
   hh = (tm % 86400 / 3600) % 24;
   mm = (tm % 86400 / 60) % 60;
   ss = (tm % 86400) % 60;
-  
+
   sprintf(s, "%02d:%02d:%02d", hh, mm, ss);
   Serial.println(s);
 }
 
 void handleTimeSeconds(uint32_t tm){
-  current_time = tm;
+  current_time = myTZ.toLocal(tm, &tcr);;
   printTime(current_time);
 }
 
 void setup(){
+
+  configuration.timezone = -5 * 60;
+  configuration.alarm = false;
+  configuration.mode = 0;
+  configuration.display_idx = 0;
+  configuration.brightness = 64;
+
   Serial.begin(115200);
   delay(200);
+
+  esp.begin();
+
+  if(RUN_MGR_ON_REBOOT || esp.status() != WL_CONNECTED)
+    esp.run_menu(10);
 
   FastLED.addLeds<LED_TYPE, DATA_PIN, CLK_PIN, COLOR_ORDER>(leds, NUM_LEDS);
   FastLED.setDither(true);
@@ -208,94 +230,24 @@ void setup(){
   fill_solid(leds, NUM_LEDS, CRGB::Black);
   FastLED.show();
 
-
-#ifndef CONNECT_TO_ADA_IO  
-  io.connect();
-  Serial.print("Wait for IO connect.");
-  while(io.status() < AIO_CONNECTED) {
-    Serial.print(".");
-    delay(500);
-  }
-  Serial.println(io.statusText());Serial.println("Connected to IO");
-#endif
-  timezone->onMessage(handleTimezone);
-  brightness->onMessage(handleBrightness);
-  display_idx_io->onMessage(handleDisplayIdx);
   EEPROM.begin(512);
-  loadSettings();
+  // loadSettings();
   new_display(Display_ps[configuration.display_idx % N_DISPLAY]);
-  
+
   FastLED.setBrightness(configuration.brightness);
-  
-  timeClient.setTimeOffset(configuration.timezone * 60);
+
+  // timeClient.setTimeOffset(configuration.timezone * 60);
   timeClient.begin();
   CurrentDisplay_p->init();
 }
 
 void loadSettings(){
-  EEPROM_readAnything(0, configuration);  
+  EEPROM_readAnything(0, configuration);
 }
 
 void saveSettings(){
   EEPROM_writeAnything(0, configuration);
   EEPROM.commit();
-}
-
-void handleTimezone(AdafruitIO_Data *message){
-  char *data = (char*)message->value();
-  int dataLen = strlen(data);
-  if (dataLen >= 0) {
-    String dataStr = String(data);
-    int new_timezone = (int)dataStr.toInt();
-    if (new_timezone != configuration.timezone && -1440/2 < new_timezone && new_timezone <= 1440/2){
-      configuration.timezone = new_timezone;
-      timeClient.setTimeOffset(configuration.timezone * 60);
-      saveSettings();
-    }
-  }  
-
-  // print out the received value
-  Serial.print(message->feedName());
-  Serial.print(" ");
-  Serial.println(message->value());
-}
-
-void handleBrightness(AdafruitIO_Data *message){
-  char *data = (char*)message->value();
-
-  int dataLen = strlen(data);
-  if (dataLen > 0) {
-    String dataStr = String(data);
-    int new_brightness = (int)dataStr.toInt();
-    if ((new_brightness != configuration.brightness) && (0 <= new_brightness) && (new_brightness <= MAX_BRIGHTNESS)){
-      configuration.brightness = new_brightness;
-      FastLED.setBrightness(configuration.brightness);
-      saveSettings();
-    }
-  }
-  // print out the received value
-  Serial.print(message->feedName());
-  Serial.print(" ");
-  Serial.println(message->value());
-}
-
-void handleDisplayIdx(AdafruitIO_Data *message){
-  char *data = (char*)message->value();
-
-  int dataLen = strlen(data);
-  if (dataLen > 0) {
-    String dataStr = String(data);
-    int new_idx = (int)dataStr.toInt() % N_DISPLAY;
-    if ((new_idx != configuration.display_idx) && (0 <= new_idx) && (new_idx <= MAX_BRIGHTNESS)){
-      configuration.display_idx = new_idx;
-      new_display(Display_ps[new_idx]);
-      saveSettings();
-    }
-  }
-  // print out the received value
-  Serial.print(message->feedName());
-  Serial.print(" ");
-  Serial.println(message->value());
 }
 
 const struct CRGB color = CRGB::White;
@@ -414,7 +366,7 @@ void rainbow() {
   int i, dx, dy;
   CHSV hsv;
   float dist;
-  
+
   hsv.hue = 0;
   hsv.val = 255;
   hsv.sat = 240;
@@ -483,7 +435,7 @@ void logical_copy(int n, bool* mask, bool* out){
     out[i] = mask[i];
   }
 }
-  
+
 void logical_not(int n, bool* mask, bool* out){
   int i;
   for(i = 0; i < n; i++){
@@ -501,7 +453,7 @@ bool logical_equal(int n, bool* mask, bool* wipe){
 }
 bool all_true(int n, bool* mask){
   int i = 0;
-  
+
   while(i < n && mask[i]){
     i++;
   }
@@ -514,7 +466,7 @@ bool any_false(int n, bool* mask){
 
 bool all_false(int n, bool* mask){
   int i = 0;
-  
+
   while(i < n && !mask[i]){
     i++;
   }
@@ -541,7 +493,7 @@ const int32_t UPDATE_IO_MS = 5000;
 int32_t last_io_update_ms= 0;
 
 void loop(){
-  clock();
+  do_clock();
 }
 
 void word_drop_in(uint16_t time_inc){
@@ -549,12 +501,12 @@ void word_drop_in(uint16_t time_inc){
   uint8_t word[3];  // start columm, start row, length of the current word
   bool tmp_mask[NUM_LEDS];
   uint8_t tmp_word[3];
-  
+
   fillMask(mask, false);
   fillMask(wipe, false);
   fillMask(tmp_mask, false);
-  
-  for(uint8_t j = 0; j < n_byte_per_display; j++){ // j is a byte index 
+
+  for(uint8_t j = 0; j < n_byte_per_display; j++){ // j is a byte index
     // read the state for the next set of 8 words
     bits = pgm_read_byte(DISPLAYS + 1 + (time_inc * n_byte_per_display) + j);
     for(uint8_t k = 0; k < 8; k++){                     // k is a bit index
@@ -577,7 +529,7 @@ void word_drop_in(uint16_t time_inc){
 	  tmp_word[1] = rr;
 	  setWordMask(wipe, tmp_word, false);
 	  logical_or(NUM_LEDS, mask, wipe, tmp_mask);
-	  
+
 	  rainbow();
 	  apply_mask(tmp_mask);
 	  FastLED.show();
@@ -592,14 +544,14 @@ void word_drop_out(uint16_t time_inc){
   uint8_t word[3];  // start columm, start row, length of the current word
   bool tmp_mask[NUM_LEDS];
   uint8_t tmp_word[3];
-  
+
   //fillMask(mask, false);
   //fillMask(wipe, false);
   //fillMask(tmp_mask, false);
   logical_copy(NUM_LEDS, mask, wipe);
   logical_copy(NUM_LEDS, mask, tmp_mask);
-  
-  for(uint8_t j = 0; j < n_byte_per_display; j++){ // j is a byte index 
+
+  for(uint8_t j = 0; j < n_byte_per_display; j++){ // j is a byte index
     // read the state for the next set of 8 words
     bits = pgm_read_byte(DISPLAYS + 1 + (time_inc * n_byte_per_display) + j);
     for(uint8_t k = 0; k < 8; k++){                     // k is a bit index
@@ -622,7 +574,7 @@ void word_drop_out(uint16_t time_inc){
 	  tmp_word[1] = rr;
 	  setWordMask(wipe, tmp_word, false);
 	  logical_or(NUM_LEDS, mask, wipe, tmp_mask);
-	  
+
 	  rainbow();
 	  apply_mask(tmp_mask);
 	  FastLED.show();
@@ -644,13 +596,13 @@ void word_drop(uint16_t last_time_inc, uint16_t time_inc){
   if(last_time_inc != 289){
     word_drop_out(last_time_inc);
   }
-  
+
   // clear the new display
   fillMask(tmp_d, false);
-  
+
   // read display for next time incement
   get_time_display(mask, time_inc);
-  
+
   // clear rainbow to reveal the time
   //wipe_off_left();
   //wipe_around(OFF);
@@ -659,7 +611,7 @@ void word_drop(uint16_t last_time_inc, uint16_t time_inc){
 
 void fade_transition(uint16_t time_inc, uint16_t last_time_inc){
   int i, j;
-  
+
   fillMask(mask, false);
   get_time_display(mask, last_time_inc);
   rainbow();
@@ -688,7 +640,7 @@ void fade_transition(uint16_t time_inc, uint16_t last_time_inc){
 void TheMatrix(uint16_t last_time_inc, uint16_t time_inc){
   int n_drop = 0;
   int n_need = 8;
-  
+
   const struct CRGB color = CRGB::Green;
   uint8_t cols[NUM_LEDS];
   uint8_t rows[NUM_LEDS];
@@ -719,7 +671,7 @@ void TheMatrix(uint16_t last_time_inc, uint16_t time_inc){
       }
     }
   }
-  
+
   delay(10);
   for(j = 0; j < 255 * 3; j++){
     for(i=0; i < NUM_LEDS; i++){
@@ -749,7 +701,7 @@ void TheMatrix(uint16_t last_time_inc, uint16_t time_inc){
 	  have[XY(cols[i], rows[i])] = true;
 	}
       }
-      
+
       if(random(0, 16) == 0){ // pause at random times
 	pause[i] = random(6, 9); // for random duration
       }
@@ -757,7 +709,7 @@ void TheMatrix(uint16_t last_time_inc, uint16_t time_inc){
 	rows[i]++;
       }
       else{
-	pause[i]--; 
+	pause[i]--;
       }
       if(rows[i] > MatrixHeight - 1){
 	if(n_drop > n_need){
@@ -807,9 +759,9 @@ void TheMatrix(uint16_t last_time_inc, uint16_t time_inc){
 
   // fade to green
   delay(1000);
-  
-  
-  
+
+
+
 }
 
 void wipe_around(bool val){
@@ -822,7 +774,7 @@ void wipe_around(bool val){
   int cy = random(0, MatrixHeight-1);
   cx = 8;
   cy = 4;
-  
+
   fillMask(wipe, !val);
   while (theta < 3.14 + dtheta){
     for(row=0; row < MatrixHeight; row++){
@@ -832,7 +784,7 @@ void wipe_around(bool val){
 	}
       }
     }
-    logical_or(NUM_LEDS, wipe, mask, tmp);    
+    logical_or(NUM_LEDS, wipe, mask, tmp);
     rainbow();
     apply_mask(tmp);
     FastLED.show();
@@ -857,7 +809,7 @@ void wipe_around_transition(uint16_t last_time_inc, uint16_t time_inc){
 void wipe_down(bool val){
   int col, row;
   bool tmp[NUM_LEDS];
-  
+
   fillMask(wipe, !val);
   for(row=0; row < MatrixHeight; row++){
     for(col = MatrixWidth - 1; col >= 0; col--){
@@ -874,7 +826,7 @@ void wipe_down(bool val){
 void wipe_up(bool val){
   int col, row;
   bool tmp[NUM_LEDS];
-  
+
   fillMask(wipe, !val);
   for(row = MatrixHeight - 1; row >= 0; row--){
     for(col = MatrixWidth - 1; col >= 0; col--){
@@ -891,7 +843,7 @@ void wipe_up(bool val){
 void wipe_left(bool val){
   int col, row;
   bool tmp[NUM_LEDS];
-  
+
   fillMask(wipe, !val);
   for(col = MatrixWidth - 1; col >= 0; col--){
     for(row=0; row < MatrixHeight; row++){
@@ -916,7 +868,7 @@ void next_display(){
   Serial.println(CurrentDisplay_p->name);
 }
 
-void clock(){
+void do_clock(){
   bool tmp_d[NUM_LEDS];
   uint8_t word[3];                // will store start_x, start_y, length of word
   time_t spm;                     // seconds past midnight
@@ -928,20 +880,17 @@ void clock(){
     handleTimeSeconds(timeClient.getEpochTime());
     last_update_ms = millis();
   }
-  if(millis() - last_io_update_ms > UPDATE_IO_MS){
-    io.run();
-    last_io_update_ms - millis();
-  }
 
   spm = current_time % 86400;
   time_inc = spm / 300;
   minute_hack_inc = (spm % 300) / (300. / float(n_minute_state));
-  
+
   if(time_inc != last_time_inc){
+    if(spm <= 300){ next_display(); }  // Switch to next on day change.
     CurrentDisplay_p->transition(last_time_inc, time_inc);
     last_time_inc = time_inc;
   }
-  
+
   fillMask(mask, false);
   get_time_display(mask, time_inc);
   CurrentDisplay_p->background();
@@ -955,7 +904,7 @@ void Normal_loop(void) {
 
 void JustUpdateTime(bool *mask, uint16_t time_inc){
   fillMask(mask, false);
-  
+
   // read display for next time incement
   get_time_display(mask, time_inc);
 
@@ -988,8 +937,8 @@ void get_time_display(bool* mask, int i){
   uint8_t bits;     // holds the on off state for 8 words at a time
   uint8_t word[3];  // start columm, start row, length of the current word
 
-  for(uint8_t j = 0; j < n_byte_per_display; j++){ // j is a byte index 
-    
+  for(uint8_t j = 0; j < n_byte_per_display; j++){ // j is a byte index
+
     // read the state for the next set of 8 words
     bits = pgm_read_byte(DISPLAYS + 1 + (i * n_byte_per_display) + j);
     for(uint8_t k = 0; k < 8; k++){                     // k is a bit index
@@ -1000,7 +949,7 @@ void get_time_display(bool* mask, int i){
 	}
       }
     }
-  } 
+  }
 }
 
 /*
@@ -1011,14 +960,14 @@ void get_time_display(bool* mask, int i){
 void minutes_hack(uint8_t i, bool *out){
   uint8_t col, row, led_num; // position variables for a minute hack LED
   boolean state;             // on/off state variable for a n minute hack LED
-  
+
   // bits is a bit vector that indicates the on/off state for this time incriment i
   uint32_t bits = getminutebits(i);
   for(uint8_t j = 0; j < n_minute_led; j++){      // j is a minute-hack LED index
 
     // read LED location:
     //     skip first two bytes that contain values for number of minute hack states and number of minute hack leds
-    led_num = pgm_read_byte(MINUTE_LEDS + 2 + j); 
+    led_num = pgm_read_byte(MINUTE_LEDS + 2 + j);
 
     // pull location information for this LED
     col =   (led_num & 0b00001111);
@@ -1030,6 +979,6 @@ void minutes_hack(uint8_t i, bool *out){
     else{
       out[col] &= (~(1<<row));
     }
-  } 
+  }
 }
 

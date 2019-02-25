@@ -182,14 +182,14 @@ void AdafruitIO_Data::setValue(float value, double lat, double lon, double ele, 
 
   #if defined(ARDUINO_ARCH_AVR)
     // Use avrlibc dtostre function on AVR platforms.
-    dtostre(value, _value, 10, 0);
+    dtostre(value, _value, precision, 0);
   #elif defined(ESP8266)
     // ESP8266 Arduino only implements dtostrf and not dtostre.  Use dtostrf
     // but accept a hint as to how many decimals of precision are desired.
     dtostrf(value, 0, precision, _value);
   #else
     // Otherwise fall back to snprintf on other platforms.
-    snprintf(_value, sizeof(_value)-1, "%f", value);
+    snprintf(_value, sizeof(_value) - 1, "%0.*f", precision, value);
   #endif
 
   setLocation(lat, lon, ele);
@@ -201,14 +201,14 @@ void AdafruitIO_Data::setValue(double value, double lat, double lon, double ele,
 
   #if defined(ARDUINO_ARCH_AVR)
     // Use avrlibc dtostre function on AVR platforms.
-    dtostre(value, _value, 10, 0);
+    dtostre(value, _value, precision, 0);
   #elif defined(ESP8266)
     // ESP8266 Arduino only implements dtostrf and not dtostre.  Use dtostrf
     // but accept a hint as to how many decimals of precision are desired.
     dtostrf(value, 0, precision, _value);
   #else
     // Otherwise fall back to snprintf on other platforms.
-    snprintf(_value, sizeof(_value)-1, "%f", value);
+    snprintf(_value, sizeof(_value) - 1, "%0.*f", precision, value);
   #endif
 
   setLocation(lat, lon, ele);
@@ -337,46 +337,56 @@ unsigned long AdafruitIO_Data::toUnsignedLong()
 
 int AdafruitIO_Data::toRed()
 {
-  if(! _value)
-    return 0;
-
-  char r[] = "0x";
-  strncat(r, toChar() + 1, 2);
-
-  return (int)strtol(r, NULL, 0);
+    // Convert 0xRRGGBB to red.
+    if (! _value)
+    {
+        return 0;
+    }
+    char r[5];
+    strcpy(r, "0x");
+    strncpy(&r[2], toChar() + 1, 2);
+    r[4] = '\x00';
+    return (int)strtol(r, NULL, 0);
 }
 
 int AdafruitIO_Data::toGreen()
 {
-  if(! _value)
-    return 0;
-
-  char g[] = "0x";
-  strncat(g, toChar() + 3, 2);
-
-  return (int)strtol(g, NULL, 0);
+    // Convert 0xRRGGBB to green.
+    if (! _value)
+    {
+        return 0;
+    }
+    char g[5];
+    strcpy(g, "0x");
+    strncpy(&g[2], toChar() + 3, 2);
+    g[4] = '\x00';
+    return (int)strtol(g, NULL, 0);
 }
 
 int AdafruitIO_Data::toBlue()
 {
-  if(! _value)
-    return 0;
-
-  char b[] = "0x";
-  strncat(b, toChar() + 5, 2);
-
-  return (int)strtol(b, NULL, 0);
+    // Convert 0xRRGGBB to blue.
+    if (! _value)
+    {
+        return 0;
+    }
+    char b[5];
+    strcpy(b, "0x");
+    strncpy(&b[2], toChar() + 5, 2);
+    b[4] = '\x00';
+    return (int)strtol(b, NULL, 0);
 }
 
 long AdafruitIO_Data::toNeoPixel()
 {
-  if(! _value)
-    return 0;
-
-  char rgb_string[9] = "0x";
-  strncat(rgb_string, toChar() + 1, 6);
-
-  return strtol(rgb_string, NULL, 0);
+    if (! _value)
+    {
+        return 0;
+    }
+    char rgb[9];
+    strcpy(rgb, "0x");
+    strncpy(&rgb[2], toChar() + 1, 6);
+    return strtol(rgb, NULL, 0);
 }
 
 char* AdafruitIO_Data::toCSV()
@@ -649,6 +659,13 @@ bool AdafruitIO_Data::_parseCSV()
       _ele = atof(fields[1]);
       field_count--;
     }
+
+    // cleanup to avoid leaks
+    int i = 0;
+    while (fields[i] != NULL){
+      free(fields[i++]);
+    }
+    free(fields);
 
     return field_count == 0;
   }
